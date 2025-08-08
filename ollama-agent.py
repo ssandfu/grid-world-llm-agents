@@ -122,7 +122,7 @@ goal_information = "The goal is at position (1, 10)."
 
 expected_output_message_formated_output = "Return a short summary of your thought progress and the action the robot should take next in the following format: direction: \"<direction in [down, right, up, left]>\", numerical Action Value: <integer in [0,1,2,3]."
 
-history_context = 
+history_context = " \n\nBelow you will have a history of previous all observations, the actions you have taken based on the observations and the reward the environment gave you. A higher reward is more desirable than a smaller reward i.e. an action with a reward of -0.01 was still a better action than -0.1 despite being negative. Use primarily the last observation as well as the previous observations, actions and reward to determine the best possible action for the robot. Keep track of where you have already been in the gridworld based on the observations. "
 
 few_shot_no_walls_1="""
 Under no circumstances select an action that would result in a robot position inside a wall. In this example do not move downwards, because this would be a collision with a wall. The only allowed action in this example are move up, left or right:
@@ -190,6 +190,7 @@ Under no circumstances select an action that would result in a robot position in
  ['?' '?' '?' '?' '?' '?' '?' ' ' ' ' 'R' ' ' ' ' ' ' '?' '?' '?' '?' '?' '?' '?' '?']
  ['?' '?' '?' '?' '?' '?' '?' 'W' 'W' 'W' 'W' 'W' 'W' '?' '?' '?' '?' '?' '?' '?' '?']]
  """
+
 
 prompt_experiment_base = task_explain_navigation + grid_world_explain + observation_explain_5x5  + \
                          actions_explained + north_goal_information + \
