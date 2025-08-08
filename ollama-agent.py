@@ -11,6 +11,9 @@ from openai import OpenAI
 from pydantic import BaseModel
 import ollama
 
+import json
+import re # regex for output filtering
+
 #######################
 # HYPERPARAMETERS     #
 #######################
@@ -64,7 +67,7 @@ START_COL = 10
 gw_line_width_np = 2 + (len(GRIDWORLD[0])+1) + 2
 np.set_printoptions(linewidth=gw_line_width_np)
 
-model_id = 'deepseek-r1:70b'#'deepseek-r1:32b'#'gpt-oss:20b'#'gpt-oss:120b'#'mixtral'
+model_id = 'gpt-oss:120b'#'deepseek-r1:70b'#'deepseek-r1:32b'#'gpt-oss:20b'#'mixtral'
 #model_id = 'gpt-4.1'
 if model_id in ["gpt-4.1","o3"]:
     client = OpenAI(
@@ -100,27 +103,72 @@ def create_environment():
         gridworld=GRIDWORLD,
         start_row=START_ROW,
         start_col=START_COL,
-        max_steps=1000
+        max_steps=1000,
+        use_exploration_mode = True
     )
 
 task_explain_navigation = "You are a helpful navigation assistant that has to help a robot get to his goal destination. Do not crash into the wall and navigate the robot to the goal position. You have to give an action to move the robot based on the current observation and previous observations in your context window. "
 
-task_explain_exploration = "Your task is to help a robot explore an unknown environment displayed as a gridworld and uncover all of the unknown tiles inside a gridworld. You have to give an action to move the robot based on the current observation and previous observations in your context window."
+task_explain_exploration_old = "Your task is to help a robot explore an unknown environment displayed as a gridworld and uncover all of the unknown tiles inside a gridworld. You have to give an action to move the robot based on the current observation and previous observations in your context window."
+task_explain_exploration = """You are the robot’s navigation module. At each turn, decide a single cardinal move that will safely uncover new territory, avoid collisions with walls (W), and maximise the long-term reward. Continue until every “?” tile has been observed."""
+
 
 observation_explain_5x5 = "As an observation you get a 5x5 grid around your current position as an array of characters that describes the current grid around the robot. The position that the robot is on is in the center of the 5x5 grid that is given as an oberservation. "
 
 observation_explain_exploration = "As an observation you get the grid world with all unexplored tiles and all the revealed tiles with the current position of the robot marked with \"R\". "
 
-grid_world_explain = "The gridworld has its 0,0 coordinate at the top left corner of the grid. The position is the index of rows and columns in the grid world with a base of 0. The gridworld has the dimensions 19 rows and 21 columns. The gridworld is encoded so a \"W\" is a wall, \".\" and \" \" are free cells, \"-\" is a negative cell, \"+\" is a positive cell and \"g\" is the goal. Unknown spaces for exploration are marked with \"?\". "
+grid_world_explain_old = "The gridworld has its 0,0 coordinate at the top left corner of the grid. The position is the index of rows and columns in the grid world with a base of 0. The gridworld has the dimensions 19 rows and 21 columns. The gridworld is encoded so a \"W\" is a wall, \".\" and \" \" are free cells, \"-\" is a negative cell, \"+\" is a positive cell and \"g\" is the goal. Unknown spaces for exploration are marked with \"?\". "
+grid_world_explain = """#### 1 · Gridworld Reference
+| Symbol | Meaning                         |
+|--------|---------------------------------|
+| 'W'    | Wall (impassable)               |
+| '.' or ' ' | Free cell                |
+| '-'    | Free cell with negative reward |
+| '+'    | Free cell with positive reward |
+| 'g'    | Goal                           |
+| '?'    | Unexplored tile                |
+| 'R'    | Robot’s current position       |
+
+*Coordinates* `(row, col)` with origin **(0, 0)** at the **top-left** corner.
+"""
 
 actions_explained = "The actions have a numerical value that lets the robot move in a cardinal direction. Action 0 is a move down i.e. a single positive movement in the rows direction, Action 1 is a move to the right i.e. a single positive movement in the columns direction, Action 2 is a move up i.e. a single negative movement in the rows direction and Action 3 is a move to the left i.e. a single negative movement in the columns direction. Under no circumstances select an action that would result in a collision with a wall (W). "
+actions_explained = """#### 2 · Actions
+
+| Action | Move  | Δ row | Δ col |
+|--------|-------|-------|-------|
+| `0`    | Down  | +1    | 0     |
+| `1`    | Right | 0     | +1    |
+| `2`    | Up    | –1    | 0     |
+| `3`    | Left  | 0     | –1    |
+
+**Never** choose an action that would put the robot on a `W`."""
 
 #Use these as alternatives when constructing the system prompt
 north_goal_information = "The goal is somewhere north of the robot. "
 no_goal_information = "Unless you can see it, you do not have any information where the goal position is. "
 goal_information = "The goal is at position (1, 10)."
 
-expected_output_message_formated_output = "Return a short summary of your thought progress and the action the robot should take next in the following format: direction: \"<direction in [down, right, up, left]>\", numerical Action Value: <integer in [0,1,2,3]."
+expected_output_message_formated_output_old = """
+Return a short summary of your thought progress.
+At the bottom of your reply, return the action the robot should take next in the following format:
+<output>{"direction_str": "[down, right, up, left]", "direction_int": [0, 1, 2, 3]}</output>
+For example:
+<output>{"direction_str": "down", "direction_int": 0}</output>
+Do not escape any characters in this format.
+"""
+
+expected_output_message_formated_output = """#### 4 · Your Response Format
+1. **Thought summary** – *1‒3 short sentences* explaining your reasoning.  
+2. **Next action** – Output exactly once, tagged like this (no escaped characters):
+<output>{"direction_str": "[down, right, up, left]", "direction_int": [0, 1, 2, 3]}</output>
+Replace the example with the action you choose.  
+`direction_str` must be one of **"down" "right" "up" "left"**;  
+`direction_int` must be the matching integer **0 1 2 3**.
+---
+Example
+<output>{"direction_str": "down", "direction_int": 0}</output>
+"""
 
 history_context = " \n\nBelow you will have a history of previous all observations, the actions you have taken based on the observations and the reward the environment gave you. A higher reward is more desirable than a smaller reward i.e. an action with a reward of -0.01 was still a better action than -0.1 despite being negative. Use primarily the last observation as well as the previous observations, actions and reward to determine the best possible action for the robot. Keep track of where you have already been in the gridworld based on the observations. "
 
@@ -234,7 +282,7 @@ def make_gridmap_obs_llm_friendly(obs):
     obs_seen = np.array([''.join(quest_row).replace(' ','.') for quest_row in np.reshape([char for row in obs for char in row], (len(obs), len(obs[0]))).tolist()])
     return obs_seen, position
 
-def interpret_reward_llm_friendly(cur_position, last_action, last_reward):
+def interpret_reward_llm_friendly(cur_position, cur_grid, last_action, last_reward, last_position, iteration):
     reward_dict = {None: "This is the start position, so no reward.",
                    -0.01: "You did everything right and navigated to an empty space.",
                    -0.05: "You found a negative space. These are also viable empty spaces.",
@@ -247,9 +295,22 @@ def interpret_reward_llm_friendly(cur_position, last_action, last_reward):
                     2: "2: \"move up\"",
                     3: "3: \"move left\"",
                   }
-    movement_message = f"The reward to move from the previous position to {cur_position} using the action {action_dict[last_action]} was given the reward \"{reward_dict[last_reward]}"
-    movement_history.append(movement_message)
-    message = f"+++ This is the movement history of the current session:\n{movement_history}\n+++ This is the observation at the position {cur_position} which was reached from the previous position using the action {action_dict[last_action]} and was given the reward \"{reward_dict[last_reward]}\".\n"
+    movement_message_shortened = f"""### Iteration {iteration}: {last_position} -> {cur_position}  with {last_action} got the reward {last_reward} ({reward_dict[last_reward]}).
+    """
+    movement_history.append(movement_message_shortened)
+    current_status = f"""### Iteration {iteration}
+- prev → curr  : {last_position} -> {cur_position}  
+- action       : {last_action}  
+- reward       : {last_reward}: {reward_dict[last_reward]}
+<observation>
+{cur_grid}
+</observation>
+"""
+    message = f"""###Movement History
+    {movement_history}
+    +++###Current Status
+    {current_status}
+    """
     return message
 
 def chat_llm(messages, text_format=None):
@@ -285,14 +346,13 @@ def chat_llm(messages, text_format=None):
 
 #def llm_structured_output(message, text_format):
 
-def llm_get_action(obs, last_action, last_reward, max_len_context=50):
+def llm_get_action(obs, last_action, last_reward, last_position, iteration):
     global chat_history
     #cur_grid, cur_pos = make_obs_llm_friendly(obs)
     cur_grid, cur_pos = make_gridmap_obs_llm_friendly(obs)
     #cur_grid = obs
     #cur_pos = np.argwhere(cur_grid == 'R')
-    context_message = interpret_reward_llm_friendly(cur_pos, last_action, last_reward)
-    context_message += f"{cur_grid}\n"
+    context_message = interpret_reward_llm_friendly(cur_pos, cur_grid, last_action, last_reward, last_position, iteration)
     print(context_message)
     logging.info(context_message)
     chat_history.append({'role':'user', 'content': context_message})
@@ -300,20 +360,26 @@ def llm_get_action(obs, last_action, last_reward, max_len_context=50):
     
     raw_response = chat_llm(chat_message)
 
+    template = r"<output>(.*?)</output>"
+    action_json = re.search(template, raw_response).group(1)
+    action_dict = json.loads(action_json)
+    print(action_dict)
+    logging.info(action_dict)
+    return cur_pos, action_dict['direction_int'], action_dict['direction_str']
 
-    interpretation_message = [system_message, {'role': 'user', 'content': f"This message was given by an LLM to provide an action to the movement of a robot in a gridworld. Please interpret the message an find the action that is suggested. The actions have a numerical value that lets the robot move in a cardinal direction. Action 0 is a move down i.e. a single positive movement in the rows direction, Action 1 is a move to the right i.e. a single positive movement in the columns direction, Action 2 is a move up i.e. a single negative movement in the rows direction and Action 3 is a move to the left i.e. a single negative movement in the columns direction. +++ {raw_response}"}]
-    print("\n")
-    interpreted_response = chat_llm(interpretation_message, text_format=ActionOutput)#.model_json_schema())#, options={"temperature":0.0})
-    print("\n")
-    print(interpreted_response)
-    action = ActionOutput.model_validate_json(interpreted_response)
-    if action.numericVal not in [0,1,2,3]:
-        print(f"[WARN]: LLM did not select appropriate action ({action.numericVal}). An action is randomly selected.")
-        logging.info(f"[WARN]: LLM did not select appropriate action ({action.numericVal}). An action is randomly selected.")
-        action.numericVal = random.randint(0,3)
+    #interpretation_message = [system_message, {'role': 'user', 'content': f"This message was given by an LLM to provide an action to the movement of a robot in a gridworld. Please interpret the message an find the action that is suggested. The actions have a numerical value that lets the robot move in a cardinal direction. Action 0 is a move down i.e. a single positive movement in the rows direction, Action 1 is a move to the right i.e. a single positive movement in the columns direction, Action 2 is a move up i.e. a single negative movement in the rows direction and Action 3 is a move to the left i.e. a single negative movement in the columns direction. +++ {raw_response}"}]
+    #print("\n")
+    #interpreted_response = chat_llm(interpretation_message, text_format=ActionOutput)#.model_json_schema())#, options={"temperature":0.0})
+    #print("\n")
+    #print(interpreted_response)
+    #action = ActionOutput.model_validate_json(interpreted_response)
+    #if action.numericVal not in [0,1,2,3]:
+    #    print(f"[WARN]: LLM did not select appropriate action ({action.numericVal}). An action is randomly selected.")
+    #    logging.info(f"[WARN]: LLM did not select appropriate action ({action.numericVal}). An action is randomly selected.")
+    #    action.numericVal = random.randint(0,3)
     #print("[DEBUG]: Full response test. An action is randomly selected.")
     #logging.info("[DEBUG]: Full response test. An action is randomly selected.")
-    return raw_response, action.numericVal
+    #return raw_response, action.numericVal
 
 def main():
     py_env = create_environment()
@@ -323,16 +389,18 @@ def main():
     total_reward = 0
     num_steps = 0
 
+    last_position = None
     last_action = None
     last_reward = None
     
     while not done:
         #print(obs)
-        raw_output, action = llm_get_action(obs, last_action, last_reward)
-        obs, reward, terminated, _ = py_env.step(action)
-        print(f"[Iteration {str(num_steps).zfill(4)}] Action: {action} was selected. Reward: {reward}, goal reached: {terminated}")
-        logging.info(f"[Iteration {str(num_steps).zfill(4)}] Action: {action} was selected. Reward: {reward}, goal reached: {terminated}")
-        last_action = action
+        current_position, action_num_val, action_str = llm_get_action(obs, last_action, last_reward, last_position, num_steps)
+        last_position = current_position
+        obs, reward, terminated, _ = py_env.step(action_num_val)
+        print(f"[Iteration {str(num_steps).zfill(4)}] Action: {action_num_val} \"{action_str}\" was selected. Reward: {reward}, goal reached: {terminated}")
+        logging.info(f"[Iteration {str(num_steps).zfill(4)}] Action: {action_num_val} \"{action_str}\" was selected. Reward: {reward}, goal reached: {terminated}")
+        last_action = (action_num_val, action_str)
         last_reward = reward
         
         total_reward += reward
