@@ -17,6 +17,8 @@ class environment_5x5(gym.Env):
         self.plus_reward  = 0      # '+'
         self.goal_reward  = 1    # 'g'
 
+        self.no_action_reward  = -0.2
+        
         # Robuste, balancierte Kodierung im Bereich [-1, 1]
         self._symbol2idx = {
             'W': -1.0,   # Wand
@@ -75,12 +77,26 @@ class environment_5x5(gym.Env):
             for c_i in c_index[(c_index >= padding_width) & (c_index < (len(self.world_seen[0])+padding_width))]:
                 #Overwrite the question marks in the seen map
                 self.world_seen[r_i-padding_width][c_i-padding_width] = self._idx2symbol[padded[r_i, c_i]]
-
+    
     def _get_obs_revealed_map(self, padding_width=2):
         self._reveil_map(padding_width=padding_width)
         world_seen_with_robot_pos = np.array(self.world_seen)
         world_seen_with_robot_pos[self.position] = 'R'
         return world_seen_with_robot_pos
+
+    def get_reveal_percent(self):
+        np_world = np.array(self.world_seen)
+        n_total = np_world.shape[0] * np_world.shape[1]
+        
+        unique, counts = np.unique(np_world, return_counts=True)
+        try:
+            n_unexplored = dict(zip(unique, counts))['?']
+        except KeyError:
+            n_unexplored = 0
+
+        p_unexplored = n_unexplored/n_total
+        p_explored = 1 - p_unexplored
+        return p_explored
     
     def _get_obs_5x5_flat(self, padding_width=2):
         obs_x, obs_y = self.position
@@ -119,6 +135,8 @@ class environment_5x5(gym.Env):
         else:
             self.position = (row, col)
         self.step_count = 0
+        self.world_seen = np.reshape(["?" for row in self.world for char in row], (len(self.world), len(self.world[0]))).tolist()
+        
         obs = self._get_obs()
         # print(f"[ENV] Reset: Position={self.position}")
         return obs
@@ -134,7 +152,9 @@ class environment_5x5(gym.Env):
         elif action == 2:    # Norden
             nr, nc = r - 1, c
         elif action == 3:    # Westen
-            nr, nc = r, c - 1        #patch_old = padded[r:r+3, c:c+3]
+            nr, nc = r, c - 1
+        elif action == -1:    # No movement
+            nr, nc = r, c         
         else:
             raise ValueError(f"Ungültige Aktion: {action}")
 
@@ -166,9 +186,17 @@ class environment_5x5(gym.Env):
         else:
             reward = self.empty_reward
 
+        #This is very bad design, but LLMs are assholes sometimes
+        if action == -1:
+            reward = self.no_action_reward
+        
         if self.step_count >= self.max_steps:
             done = True
 
+        #If all of the map is explored you are also done
+        explored_all = bool(np.floor(self.get_reveal_percent()))
+        done = done or explored_all
+        
         self.position = (nr, nc)
         obs = self._get_obs()
         info = {'step': self.step_count}

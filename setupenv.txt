@@ -1,6 +1,6 @@
 conda create --name grid-ollama-agent python=3.10
 conda activate grid-ollama-agent
-conda install conda-forge::ollama-python numpy pydantic gym openai
+conda install conda-forge::ollama-python openai numpy pydantic gym pandas
 
 conda create --name grid-tf-agent python=3.7
 conda activate grid-tf-agent
